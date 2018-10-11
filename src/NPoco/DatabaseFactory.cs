@@ -13,6 +13,7 @@ namespace NPoco
         public static IColumnSerializer ColumnSerializer = new FastJsonColumnSerializer();
 
         private DatabaseFactoryConfigOptions _options;
+        private IPocoDataFactory _cachedPocoDataFactory;
 
         public DatabaseFactory() { }
 
@@ -36,33 +37,40 @@ namespace NPoco
             return dbFactory;
         }
 
-        public Database Build(Database database)
+        public IDatabase Build(IDatabase database)
         {
-            ConfigureMappers(database);
-            ConfigurePocoDataFactory(database);
+            var mappers = BuildMapperCollection(database);
+            ConfigurePocoDataFactoryAndMappers(database, mappers);
             ConfigureInterceptors(database);
             return database;
         }
 
-        private void ConfigureInterceptors(Database database)
+        private void ConfigureInterceptors(IDatabase database)
         {
             database.Interceptors.AddRange(_options.Interceptors);
         }
 
-        private void ConfigurePocoDataFactory(Database database)
+        private void ConfigurePocoDataFactoryAndMappers(IDatabase database, MapperCollection mappers)
         {
+            database.Mappers = mappers;
             if (_options.PocoDataFactory != null)
-                database.PocoDataFactory = _options.PocoDataFactory.Config(database.Mappers);
+            {
+                database.PocoDataFactory = _cachedPocoDataFactory = (_cachedPocoDataFactory == null ? _options.PocoDataFactory.Config(mappers) : _cachedPocoDataFactory);
+            }
         }
 
-        private void ConfigureMappers(Database database)
+        private MapperCollection BuildMapperCollection(IDatabase database)
         {
-            database.Mappers.InsertRange(0, _options.Mapper);
+            var mc = new MapperCollection();
+            mc.AddRange(database.Mappers);
+            mc.AddRange(_options.Mapper);
 
             foreach (var factory in _options.Mapper.Factories)
             {
-                database.Mappers.Factories[factory.Key] = factory.Value;
+                mc.Factories[factory.Key] = factory.Value;
             }
+
+            return mc;
         }
 
         public IPocoDataFactory GetPocoDataFactory()

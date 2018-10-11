@@ -26,9 +26,9 @@ namespace NPoco
         /// </summary>        
         void AddParameter(DbCommand cmd, object value);
         /// <summary>
-        /// Creates a command given a connection and sql
+        /// Creates a command given a connection, command type and sql
         /// </summary>        
-        DbCommand CreateCommand(DbConnection connection, string sql, params object[] args);
+        DbCommand CreateCommand(DbConnection connection, CommandType commandType, string sql, params object[] args);
         /// <summary>
         /// Begins a new transaction and returns ITransaction which can be used in a using statement
         /// </summary>        
@@ -87,6 +87,10 @@ namespace NPoco
         /// Update POCO in the table by convention or configuration specifying which columns to update
         /// </summary>        
         System.Threading.Tasks.Task<int> UpdateAsync(object poco, IEnumerable<string> columns);
+        /// <summary>
+        /// Update POCO in the table by convention or configuration specifying which columns to update
+        /// </summary>  
+        System.Threading.Tasks.Task<int> UpdateAsync<T>(T poco, Expression<Func<T, object>> fields);
         /// <summary>
         /// Delete POCO from table by convention or configuration
         /// </summary>        
@@ -189,7 +193,7 @@ namespace NPoco
         /// </summary>        
         IDeleteQueryProvider<T> DeleteMany<T>();
         /// <summary>
-        /// Performs and insert or an update depending on whether the POCO already exists
+        /// Performs an insert or an update depending on whether the POCO already exists. (i.e. an upsert/merge)
         /// </summary>        
         void Save<T>(T poco);
         /// <summary>
@@ -203,7 +207,7 @@ namespace NPoco
         /// <summary>
         /// A collection of mappers used for converting values on inserting or on mapping
         /// </summary>        
-        MapperCollection Mappers { get; }
+        MapperCollection Mappers { get; set; }
         /// <summary>
         /// The PocoData factory used to build the meta data used by NPoco
         /// </summary>        

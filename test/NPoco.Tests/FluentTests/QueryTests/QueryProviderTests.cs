@@ -85,6 +85,17 @@ namespace NPoco.Tests.FluentTests.QueryTests
         }
 
         [Test]
+        public void QueryWithSeparateWheresProduceSameSql()
+        {
+            var users1 = Database.Query<User>().Where(x => x.UserId == 1).Where(x => x.UserId == 2).ToList();
+            var sql1 = ((Database)Database).LastSQL;
+            var users2 = Database.Query<User>().Where(x => x.UserId == 1 && x.UserId == 2).ToList();
+            var sql2 = ((Database)Database).LastSQL.Replace("((","(").Replace("))", ")");
+
+            Assert.AreEqual(sql1, sql2);
+        }
+
+        [Test]
         public void QueryWithWhereFalse()
         {
             var users = Database.Query<User>().Where(x => false).ToList();
@@ -110,6 +121,13 @@ namespace NPoco.Tests.FluentTests.QueryTests
         public void QueryWithWhereCharNull()
         {
             var users = Database.Query<User>().Where(x => x.YorN == null).ToList();
+            Assert.AreEqual(0, users.Count);
+        }
+
+        [Test]
+        public void QueryWithWhereCharNullReversed()
+        {
+            var users = Database.Query<User>().Where(x => null == x.YorN).ToList();
             Assert.AreEqual(0, users.Count);
         }
 
@@ -239,6 +257,19 @@ namespace NPoco.Tests.FluentTests.QueryTests
         }
 
         [Test]
+        public void QueryWithWhereReversed()
+        {
+            var users = Database.Query<User>().Where(x => 10 < x.UserId).ToList();
+            var inmemory = InMemoryUsers.Where(x => 10 < x.UserId).ToList();
+
+            Assert.AreEqual(5, users.Count);
+            for (int i = 0; i < users.Count; i++)
+            {
+                AssertUserValues(inmemory[i], users[i]);
+            }
+        }
+
+        [Test]
         public void QueryWithWhereAnd()
         {
             var users = Database.Query<User>().Where(x => x.UserId > 10 && x.UserId < 12).ToList();
@@ -307,7 +338,7 @@ namespace NPoco.Tests.FluentTests.QueryTests
 
         private static void SetCurrentCulture(CultureInfo culture)
         {
-#if NET35 || NET40 || NET45 || NET451 || NET452 || DNX451 || DNX452
+#if NET35 || NET40 || NET45 || NET451 || NET452 || NET462 || DNX451 || DNX452
             // In the .NET Framework 4.5.2 and earlier versions, the CurrentCulture property is read-only
             Thread.CurrentThread.CurrentCulture = culture;
 #else
@@ -523,6 +554,27 @@ namespace NPoco.Tests.FluentTests.QueryTests
             Assert.AreEqual(1, user.UserId);
         }
 
+        [Test]
+        public void QueryWithWhereContainsStartsWithUnderscore()
+        {
+            var houses = Database.Query<House>().Where(o => o.Address.StartsWith("_")).ToList();
+            Assert.AreEqual(1, houses.Count);
+        }
+
+        [Test]
+        public void QueryWithWhereContainsStartsWithEscapeChar()
+        {
+            var houses = Database.Query<House>().Where(o => o.Address.Contains("\\")).ToList();
+            Assert.AreEqual(1, houses.Count);
+        }
+
+        [Test]
+        public void QueryWithIncludeInheritedReturnsNotNullObject()
+        {
+            var ex = Database.Query<Supervisor>().Include(i => i.House).ToList();
+            Assert.NotNull(ex[1].House);
+        }
+
         //[Test]
         //public void QueryWithInheritedTypesAliasCorrectlyWithJoin()
         //{
@@ -548,3 +600,20 @@ namespace NPoco.Tests.FluentTests.QueryTests
         public int UserId { get; set; }
     }
 }
+
+//VB Tests for query provider
+//Imports NPoco
+//Imports NPoco.Expressions
+
+//Module Module1
+//    Sub Main()
+//        Dim Db = New Database("asdf", "System.Data.SqlClient")
+//        Dim exp = New DefaultSqlExpression (Of User)(Db)
+//        Dim whered = exp.Where(Function(item) (item.Name = "Test"))
+//        Console.WriteLine(whered.Context.ToSelectStatement())
+//    End Sub
+//End Module
+
+//Public Class User
+//    Public Property Name As String
+//End Class

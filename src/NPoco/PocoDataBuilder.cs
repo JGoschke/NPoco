@@ -3,11 +3,18 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using NPoco.FluentMappings;
 using NPoco.RowMappers;
 
 namespace NPoco
 {
-    public class PocoDataBuilder
+    public interface InitializedPocoDataBuilder
+    {
+        TableInfo BuildTableInfo();
+        PocoData Build();
+    }
+
+    public class PocoDataBuilder : InitializedPocoDataBuilder
     {
         private readonly Cache<string, Type> _aliasToType = Cache<string, Type>.CreateStaticCache();
 
@@ -17,7 +24,7 @@ namespace NPoco
         private List<PocoMemberPlan> _memberPlans { get; set; }
         private TableInfoPlan _tableInfoPlan { get; set; }
 
-        private delegate PocoMember PocoMemberPlan(TableInfo tableInfo);
+        public delegate PocoMember PocoMemberPlan(TableInfo tableInfo);
         protected delegate TableInfo TableInfoPlan();
 
         public PocoDataBuilder(Type type, MapperCollection mapper)
@@ -26,7 +33,7 @@ namespace NPoco
             Mapper = mapper;
         }
 
-        public PocoDataBuilder Init()
+        public InitializedPocoDataBuilder Init()
         {
             var memberInfos = new List<MemberInfo>();
             var columnInfos = GetColumnInfos(Type);
@@ -35,12 +42,12 @@ namespace NPoco
             _tableInfoPlan = GetTableInfo(Type, columnInfos, memberInfos);
 
             // Get pocomember plan
-            _memberPlans = GetPocoMembers(Mapper, columnInfos, memberInfos).ToList();
+            _memberPlans = GetPocoMembers(columnInfos, memberInfos).ToList();
 
             return this;
         }
 
-        private ColumnInfo[] GetColumnInfos(Type type)
+        public ColumnInfo[] GetColumnInfos(Type type)
         {
             return ReflectionUtils.GetFieldsAndPropertiesForClasses(type)
                 .Where(x => !IsDictionaryType(x.DeclaringType))
@@ -49,15 +56,16 @@ namespace NPoco
 
         public static bool IsDictionaryType(Type type)
         {
-            return new[] { typeof(object), typeof(IDictionary<string, object>), typeof(Dictionary<string, object>) }.Contains(type);
+            return new[] {typeof(object), typeof(IDictionary<string, object>), typeof(Dictionary<string, object>)}.Contains(type)
+                || (type.GetTypeInfo().IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>) && type.GetGenericArguments().First() == typeof(string));
         }
 
-        public TableInfo BuildTableInfo()
+        TableInfo InitializedPocoDataBuilder.BuildTableInfo()
         {
             return _tableInfoPlan();
         }
 
-        public PocoData Build()
+        PocoData InitializedPocoDataBuilder.Build()
         {
             var pocoData = new PocoData(Type, Mapper);
 
@@ -107,7 +115,7 @@ namespace NPoco
             }
         }
 
-        private IEnumerable<PocoMemberPlan> GetPocoMembers(MapperCollection mapper, ColumnInfo[] columnInfos, List<MemberInfo> memberInfos, string prefix = null)
+        public IEnumerable<PocoMemberPlan> GetPocoMembers(ColumnInfo[] columnInfos, List<MemberInfo> memberInfos, string prefix = null)
         {
             var capturedMembers = memberInfos.ToArray();
             var capturedPrefix = prefix;
@@ -119,7 +127,10 @@ namespace NPoco
                 var memberInfoType = columnInfo.MemberInfo.GetMemberInfoType();
                 if (columnInfo.ReferenceType == ReferenceType.Many)
                 {
-                    memberInfoType = memberInfoType.GetGenericArguments().First();
+                    var genericArguments = memberInfoType.GetGenericArguments();
+                    memberInfoType = genericArguments.Any() 
+                        ? genericArguments.First() 
+                        : memberInfoType.GetTypeWithGenericTypeDefinitionOf(typeof(IList<>)).GetGenericArguments().First();
                 }
 
                 var childrenPlans = new PocoMemberPlan[0];
@@ -142,7 +153,7 @@ namespace NPoco
 
                     var newPrefix = JoinStrings(capturedPrefix, columnInfo.ReferenceType != ReferenceType.None ? "" : (columnInfo.ComplexPrefix ?? columnInfo.MemberInfo.Name));
 
-                    childrenPlans = GetPocoMembers(mapper, childColumnInfos, members, newPrefix).ToArray();
+                    childrenPlans = GetPocoMembers(childColumnInfos, members, newPrefix).ToArray();
                 }
 
                 MemberInfo capturedMemberInfo = columnInfo.MemberInfo;
@@ -153,10 +164,10 @@ namespace NPoco
                 var isList = IsList(capturedMemberInfo);
                 var listType = GetListType(memberType, isList);
                 var isDynamic = capturedMemberInfo.IsDynamic();
-                var fastCreate = GetFastCreate(memberType, mapper, isList, isDynamic);
+                var fastCreate = GetFastCreate(memberType, Mapper, isList, isDynamic);
                 var columnName = GetColumnName(capturedPrefix, capturedColumnInfo.ColumnName ?? capturedMemberInfo.Name);
                 var memberInfoData = new MemberInfoData(capturedMemberInfo);
-
+                
                 yield return tableInfo =>
                 {
                     var pc = new PocoColumn
@@ -174,8 +185,14 @@ namespace NPoco
                         ColumnAlias = capturedColumnInfo.ColumnAlias,
                         VersionColumn = capturedColumnInfo.VersionColumn,
                         VersionColumnType = capturedColumnInfo.VersionColumnType,
-                        SerializedColumn = capturedColumnInfo.SerializedColumn
+                        SerializedColumn = capturedColumnInfo.SerializedColumn,
+                        ValueObjectColumn = capturedColumnInfo.ValueObjectColumn,
                     };
+
+                    if (pc.ValueObjectColumn)
+                    {
+                        SetupValueObject(pc, fastCreate);
+                    }
 
                     pc.SetMemberAccessors(accessors);
 
@@ -207,18 +224,36 @@ namespace NPoco
             }
         }
 
+        private static void SetupValueObject(PocoColumn pc, FastCreate fastCreate)
+        {
+            var memberName = "Value";
+            var hasIValueObject = pc.MemberInfoData.MemberType.GetTypeWithGenericTypeDefinitionOf(typeof(IValueObject<>));
+            MemberInfo property = string.IsNullOrEmpty(pc.ValueObjectColumnName)
+                ? pc.MemberInfoData.MemberType.GetProperties().FirstOrDefault(x => x.Name.IndexOf(memberName, StringComparison.OrdinalIgnoreCase) >= 0)
+                  ?? pc.MemberInfoData.MemberType.GetProperties().First()
+                : ReflectionUtils.GetFieldsAndProperties(pc.MemberInfoData.MemberType, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).First(x => x.Name == pc.ValueObjectColumnName);
+            var type = hasIValueObject != null ? hasIValueObject.GetGenericArguments().First() : property.GetMemberInfoType();
+            var memberAccessor = hasIValueObject != null ? new MemberAccessor(typeof(IValueObject<>).MakeGenericType(type), memberName) : new MemberAccessor(pc.MemberInfoData.MemberType, property.Name);
+            pc.SetValueObjectAccessors(fastCreate, (target, value) => memberAccessor.Set(target, value), target => memberAccessor.Get(target));
+            pc.ColumnType = type;
+        }
+
         private static FastCreate GetFastCreate(Type memberType, MapperCollection mapperCollection, bool isList, bool isDynamic)
         {
             return memberType.IsAClass() || isDynamic
                        ? (new FastCreate(isList
-                            ? memberType.GetGenericArguments().First()
+                            ? (memberType.GetGenericArguments().Any() ? memberType.GetGenericArguments().First() : memberType.GetTypeWithGenericTypeDefinitionOf(typeof(IList<>)).GetGenericArguments().First())
                             : memberType, mapperCollection))
                        : null;
         }
 
         private static Type GetListType(Type memberType, bool isList)
         {
-            return isList ? typeof(List<>).MakeGenericType(memberType.GetGenericArguments().First()) : null;
+            return isList
+                ? (memberType.GetGenericArguments().Length > 0
+                    ? typeof(List<>).MakeGenericType(memberType.GetGenericArguments().First())
+                    : memberType)
+                : null;
         }
 
         public List<MemberAccessor> GetMemberAccessors(IEnumerable<MemberInfo> memberInfos)

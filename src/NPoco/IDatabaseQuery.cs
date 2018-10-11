@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Data;
 using System.Linq.Expressions;
 using NPoco.Linq;
 #if !NET35 && !NET40
@@ -35,7 +36,12 @@ namespace NPoco
         /// Executes the provided sql and parameters
         /// </summary>
         int Execute(Sql sql);
-        
+
+        /// <summary>
+        /// Executes the provided sql and parameters with the specified command type
+        /// </summary>
+        int Execute(string sql, CommandType commandType, params object[] args);
+
         /// <summary>
         /// Executes the provided sql and parameters and casts the result to T
         /// </summary>
@@ -45,6 +51,11 @@ namespace NPoco
         /// Executes the provided sql and parameters and casts the result to T
         /// </summary>
         T ExecuteScalar<T>(Sql sql);
+
+        /// <summary>
+        /// Executes the provided sql and parameters with the specified commandType and casts the result to T
+        /// </summary>
+        T ExecuteScalar<T>(string sql, CommandType commandType, params object[] args);
 
         /// <summary>
         /// Non generic Fetch which returns a list of objects of the given type provided
@@ -347,6 +358,27 @@ namespace NPoco
 
 #if !NET35 && !NET40
         /// <summary>
+        /// Fetch the only row of type T using the sql and parameters specified
+        /// Get an object of type T by primary key value
+        /// </summary>
+        Task<T> SingleAsync<T>(string sql, params object[] args);
+
+        /// <summary>
+        /// Fetch the only row of type T using the sql and parameters specified
+        /// </summary>
+        Task<T> SingleAsync<T>(Sql sql);
+
+        /// <summary>
+        /// Fetch the only row of type T using the sql and parameters specified
+        /// </summary>
+        Task<T> SingleOrDefaultAsync<T>(string sql, params object[] args);
+
+        /// <summary>
+        /// Fetch the only row of type T using the sql and parameters specified
+        /// </summary>
+        Task<T> SingleOrDefaultAsync<T>(Sql sql);
+
+        /// <summary>
         /// Get an object of type T by primary key value
         /// </summary>
         Task<T> SingleByIdAsync<T>(object primaryKey);
@@ -355,6 +387,26 @@ namespace NPoco
         /// Get an object of type T by primary key value
         /// </summary>
         Task<T> SingleOrDefaultByIdAsync<T>(object primaryKey);
+
+        /// <summary>
+        /// Fetch the first row of type T using the sql and parameters specified
+        /// </summary>
+        Task<T> FirstAsync<T>(string sql, params object[] args);
+
+        /// <summary>
+        /// Fetch the first row of type T using the sql and parameters specified
+        /// </summary>
+        Task<T> FirstAsync<T>(Sql sql);
+
+        /// <summary>
+        /// Fetch the first row of type T using the sql and parameters specified
+        /// </summary>
+        Task<T> FirstOrDefaultAsync<T>(string sql, params object[] args);
+
+        /// <summary>
+        /// Fetch the first row of type T using the sql and parameters specified
+        /// </summary>
+        Task<T> FirstOrDefaultAsync<T>(Sql sql);
 
         /// <summary>
         /// Fetch objects of type T from the database using the sql and parameters specified. 

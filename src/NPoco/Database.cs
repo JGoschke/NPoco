@@ -27,40 +27,31 @@ using System.Configuration;
 
 namespace NPoco
 {
-    public partial class Database : IDatabase
+    public partial class Database : IDatabase, IDatabaseHelpers
     {
         public const bool DefaultEnableAutoSelect = true;
 
         public Database(DbConnection connection)
-            : this(connection, null, null, null, DefaultEnableAutoSelect)
+            : this(connection, null, null, DefaultEnableAutoSelect)
         { }
 
         public Database(DbConnection connection, DatabaseType dbType)
-            : this(connection, dbType, null, null, DefaultEnableAutoSelect)
+            : this(connection, dbType, null, DefaultEnableAutoSelect)
         { }
-
+        
         public Database(DbConnection connection, DatabaseType dbType, IsolationLevel? isolationLevel)
-            : this(connection, dbType, null, isolationLevel, DefaultEnableAutoSelect)
+            : this(connection, dbType, isolationLevel, DefaultEnableAutoSelect)
         { }
 
-        public Database(DbConnection connection, DatabaseType dbType, DbProviderFactory dbProviderFactory)
-            : this(connection, dbType, dbProviderFactory, null, DefaultEnableAutoSelect)
-        { }
-
-        public Database(DbConnection connection, DatabaseType dbType, DbProviderFactory dbProviderFactory, IsolationLevel? isolationLevel)
-            : this(connection, dbType, dbProviderFactory, isolationLevel, DefaultEnableAutoSelect)
-        { }
-
-        public Database(DbConnection connection, DatabaseType dbType, DbProviderFactory dbProviderFactory, IsolationLevel? isolationLevel, bool enableAutoSelect)
+        public Database(DbConnection connection, DatabaseType dbType, IsolationLevel? isolationLevel, bool enableAutoSelect)
         {
             EnableAutoSelect = enableAutoSelect;
             KeepConnectionAlive = true;
 
+            _connectionPassedIn = true;
             _sharedConnection = connection;
             _connectionString = connection.ConnectionString;
-            _factory = dbProviderFactory;
-            var dbTypeName = (_factory == null ? _sharedConnection.GetType() : _factory.GetType()).Name;
-            _dbType = dbType ?? DatabaseType.Resolve(dbTypeName, null);
+            _dbType = dbType ?? DatabaseType.Resolve(_sharedConnection.GetType().Name, null);
             _providerName = _dbType.GetProviderName();
             _isolationLevel = isolationLevel.HasValue ? isolationLevel.Value : _dbType.GetDefaultTransactionIsolationLevel();
             _paramPrefix = _dbType.GetParameterPrefix(_connectionString);
@@ -219,6 +210,9 @@ namespace NPoco
 
         private void OpenSharedConnectionImp(bool isInternal)
         {
+            if (_connectionPassedIn && _sharedConnection != null && _sharedConnection.State != ConnectionState.Open)
+                throw new Exception("You must explicitly open the connection before executing anything when passing in a DbConnection to Database");
+
             if (_sharedConnection != null && _sharedConnection.State != ConnectionState.Broken && _sharedConnection.State != ConnectionState.Closed)
                 return;
 
@@ -496,100 +490,113 @@ namespace NPoco
             var p = cmd.CreateParameter();
             p.ParameterName = string.Format("{0}{1}", _paramPrefix, cmd.Parameters.Count);
 
-            var dbtypeSet = false;
-
-            if (value == null)
-            {
-                p.Value = DBNull.Value;
-            }
-            else
-            {
-                // Give the database type first crack at converting to DB required type
-                value = _dbType.MapParameterValue(value);
-
-                var t = value.GetType();
-                var underlyingT = Nullable.GetUnderlyingType(t);
-                if (t.GetTypeInfo().IsEnum || (underlyingT != null && underlyingT.GetTypeInfo().IsEnum))		// PostgreSQL .NET driver wont cast enum to int
-                {
-                    p.Value = (int)value;
-                }
-                else if (t == typeof(Guid))
-                {
-                    p.Value = value;
-                    p.DbType = DbType.Guid;
-                    p.Size = 40;
-                    dbtypeSet = true;
-                }
-                else if (t == typeof(string))
-                {
-                    var strValue = value as string;
-                    if (strValue == null)
-                    {
-                        p.Size = 0;
-                        p.Value = String.Empty;
-                    }
-                    else
-                    {
-                        // out of memory exception occurs if trying to save more than 4000 characters to SQL Server CE NText column. Set before attempting to set Size, or Size will always max out at 4000
-                        if (strValue.Length + 1 > 4000 && p.GetType().Name == "SqlCeParameter")
-                        {
-                            p.GetType().GetProperty("SqlDbType").SetValue(p, SqlDbType.NText, null);
-                        }
-
-                        p.Size = Math.Max(strValue.Length + 1, 4000); // Help query plan caching by using common size
-                        p.Value = value;
-                    }
-                }
-                else if (t == typeof(AnsiString))
-                {
-                    var ansistrValue = value as AnsiString;
-                    if (ansistrValue == null)
-                    {
-                        p.Size = 0;
-                        p.Value = String.Empty;
-                        p.DbType = DbType.AnsiString;
-                    }
-                    else
-                    {
-                        // Thanks @DataChomp for pointing out the SQL Server indexing performance hit of using wrong string type on varchar
-                        p.Size = Math.Max(ansistrValue.Value.Length + 1, 4000);
-                        p.Value = ansistrValue.Value;
-                        p.DbType = DbType.AnsiString;
-                    }
-                    dbtypeSet = true;
-                }
-                else if (value.GetType().Name == "SqlGeography") //SqlGeography is a CLR Type
-                {
-                    p.GetType().GetProperty("UdtTypeName").SetValue(p, "geography", null); //geography is the equivalent SQL Server Type
-                    p.Value = value;
-                }
-
-                else if (value.GetType().Name == "SqlGeometry") //SqlGeometry is a CLR Type
-                {
-                    p.GetType().GetProperty("UdtTypeName").SetValue(p, "geometry", null); //geography is the equivalent SQL Server Type
-                    p.Value = value;
-                }
-                else
-                {
-                    p.Value = value;
-                }
-
-                if (!dbtypeSet)
-                {
-                    var dbType = _dbType.LookupDbType(p.Value.GetTheType(), p.ParameterName);
-                    if (dbType.HasValue)
-                    {
-                        p.DbType = dbType.Value;
-                    }
-                }
-            }
-
+            SetParameterValue(p, value);
+            
             cmd.Parameters.Add(p);
         }
 
-        // Create a command
-        public virtual DbCommand CreateCommand(DbConnection connection, string sql, params object[] args)
+        private void SetParameterValue(DbParameter p, object value)
         {
+            if (value == null)
+            {
+                p.Value = DBNull.Value;
+                return;
+            }
+
+            // Give the database type first crack at converting to DB required type
+            value = _dbType.MapParameterValue(value);
+
+            var dbtypeSet = false;
+            var t = value.GetType();
+            var underlyingT = Nullable.GetUnderlyingType(t);
+            if (t.GetTypeInfo().IsEnum || (underlyingT != null && underlyingT.GetTypeInfo().IsEnum))        // PostgreSQL .NET driver wont cast enum to int
+            {
+                p.Value = (int)value;
+            }
+            else if (t == typeof(Guid))
+            {
+                p.Value = value;
+                p.DbType = DbType.Guid;
+                p.Size = 40;
+                dbtypeSet = true;
+            }
+            else if (t == typeof(string))
+            {
+                var strValue = value as string;
+                if (strValue == null)
+                {
+                    p.Size = 0;
+                    p.Value = String.Empty;
+                }
+                else
+                {
+                    // out of memory exception occurs if trying to save more than 4000 characters to SQL Server CE NText column. Set before attempting to set Size, or Size will always max out at 4000
+                    if (strValue.Length + 1 > 4000 && p.GetType().Name == "SqlCeParameter")
+                    {
+                        p.GetType().GetProperty("SqlDbType").SetValue(p, SqlDbType.NText, null);
+                    }
+
+                    p.Size = Math.Max(strValue.Length + 1, 4000); // Help query plan caching by using common size
+                    p.Value = value;
+                }
+            }
+            else if (t == typeof(AnsiString))
+            {
+                var ansistrValue = value as AnsiString;
+                if (ansistrValue == null)
+                {
+                    p.Size = 0;
+                    p.Value = String.Empty;
+                    p.DbType = DbType.AnsiString;
+                }
+                else
+                {
+                    // Thanks @DataChomp for pointing out the SQL Server indexing performance hit of using wrong string type on varchar
+                    p.Size = Math.Max(ansistrValue.Value.Length + 1, 4000);
+                    p.Value = ansistrValue.Value;
+                    p.DbType = DbType.AnsiString;
+                }
+                dbtypeSet = true;
+            }
+            else if (value.GetType().Name == "SqlGeography") //SqlGeography is a CLR Type
+            {
+                p.GetType().GetProperty("UdtTypeName").SetValue(p, "geography", null); //geography is the equivalent SQL Server Type
+                p.Value = value;
+            }
+
+            else if (value.GetType().Name == "SqlGeometry") //SqlGeometry is a CLR Type
+            {
+                p.GetType().GetProperty("UdtTypeName").SetValue(p, "geometry", null); //geography is the equivalent SQL Server Type
+                p.Value = value;
+            }
+            else
+            {
+                p.Value = value;
+            }
+
+            if (!dbtypeSet)
+            {
+                var dbType = _dbType.LookupDbType(p.Value.GetTheType(), p.ParameterName);
+                if (dbType.HasValue)
+                {
+                    p.DbType = dbType.Value;
+                }
+            }
+        }
+
+        // Create a command
+        private DbCommand CreateCommand(DbConnection connection, string sql, params object[] args)
+        {
+            return CreateCommand(connection, CommandType.Text, sql, args);
+        }
+        
+        public virtual DbCommand CreateCommand(DbConnection connection, CommandType commandType, string sql, params object[] args)
+        {
+            if (commandType == CommandType.StoredProcedure)
+            {
+                return CreateStoredProcedureCommand(connection, sql, args);
+            }
+
             // Perform parameter prefix replacements
             if (_paramPrefix != "@")
                 sql = ParameterHelper.rxParamsPrefix.Replace(sql, m => _paramPrefix + m.Value.Substring(1));
@@ -598,7 +605,7 @@ namespace NPoco
             // Create the command and add parameters
             DbCommand cmd = connection.CreateCommand();
             cmd.Connection = connection;
-            cmd.CommandText = sql;
+            cmd.CommandText = sql;            
             cmd.Transaction = _transaction;
 
             foreach (var item in args)
@@ -690,9 +697,6 @@ namespace NPoco
             }
         }
 
-        private List<IInterceptor> _interceptors = new List<IInterceptor>();
-        public List<IInterceptor> Interceptors { get { return _interceptors; } }
-
         protected virtual bool OnInserting(InsertContext insertContext)
         {
             return true;
@@ -725,6 +729,46 @@ namespace NPoco
             var result = OnDeleting(deleteContext);
             return result && Interceptors.OfType<IDataInterceptor>().All(x => x.OnDeleting(this, deleteContext));
         }
+        
+        public DbCommand CreateStoredProcedureCommand(DbConnection connection, string name, params object[] args)
+        {
+            DbCommand cmd = connection.CreateCommand();
+            cmd.Connection = connection;
+            cmd.CommandText = name;
+            cmd.CommandType = CommandType.StoredProcedure;
+            cmd.Transaction = _transaction;
+
+            if (args.Length == 1)
+            {
+                var arg = args[0] as DbParameter;
+                if (arg != null)
+                {
+                    cmd.Parameters.Add(arg);
+                }
+                else
+                {
+                    var props = args[0].GetType().GetProperties().Select(x => new { x.Name, Value = x.GetValue(args[0], null) }).ToList();
+                    foreach(var item in props)
+                    {
+                        DbParameter param = cmd.CreateParameter();
+                        param.ParameterName = item.Name;
+
+                        SetParameterValue(param, item.Value);
+                        
+                        cmd.Parameters.Add(param);
+                    }
+                }
+            }
+            else
+            {
+                cmd.Parameters.AddRange(args.OfType<DbParameter>().ToArray());
+            }
+
+            // Notify the DB type
+            _dbType.PreExecute(cmd);
+
+            return cmd;
+        }
 
         // Execute a non-query command
         public int Execute(string sql, params object[] args)
@@ -734,15 +778,17 @@ namespace NPoco
 
         public int Execute(Sql Sql)
         {
-            var sql = Sql.SQL;
-            var args = Sql.Arguments;
+            return Execute(Sql.SQL, CommandType.Text, Sql.Arguments);
+        }
 
+        public int Execute(string sql, CommandType commandType, params object[] args)
+        {
             try
             {
                 OpenSharedConnectionInternal();
-                using (var cmd = CreateCommand(_sharedConnection, sql, args))
+                using (var cmd = CreateCommand(_sharedConnection, commandType, sql, args))
                 {
-                    var result = ExecuteNonQueryHelper(cmd);
+                    var result = ((IDatabaseHelpers)this).ExecuteNonQueryHelper(cmd);
                     return result;
                 }
             }
@@ -762,26 +808,28 @@ namespace NPoco
         {
             return ExecuteScalar<T>(new Sql(sql, args));
         }
-
+        
         public T ExecuteScalar<T>(Sql Sql)
         {
-            var sql = Sql.SQL;
-            var args = Sql.Arguments;
+            return ExecuteScalar<T>(Sql.SQL, CommandType.Text, Sql.Arguments);
+        }
 
+        public T ExecuteScalar<T>(string sql, CommandType commandType, params object[] args)
+        {
             try
             {
                 OpenSharedConnectionInternal();
-                using (var cmd = CreateCommand(_sharedConnection, sql, args))
+                using (var cmd = CreateCommand(_sharedConnection, commandType, sql, args))
                 {
                     object val = ExecuteScalarHelper(cmd);
 
                     if (val == null || val == DBNull.Value)
                         return default(T);
 
-                    Type t = typeof (T);
+                    Type t = typeof(T);
                     Type u = Nullable.GetUnderlyingType(t);
 
-                    return (T) Convert.ChangeType(val, u ?? t);
+                    return (T)Convert.ChangeType(val, u ?? t);
                 }
             }
             catch (Exception x)
@@ -903,29 +951,32 @@ namespace NPoco
             return Query(default(T), Sql);
         }
 
-        private IEnumerable<T> Read<T>(Type type, object instance, DbDataReader r)
+        private IEnumerable<T> Read<T>(Type type, object instance, DbDataReader r, DbCommand cmd)
         {
             try
             {
-                using (r)
+                using (cmd)
                 {
-                    var pd = PocoDataFactory.ForType(type);
-                    var factory = new MappingFactory(pd, r);
-                    while (true)
+                    using (r)
                     {
-                        T poco;
-                        try
+                        var pd = PocoDataFactory.ForType(type);
+                        var factory = new MappingFactory(pd, r);
+                        while (true)
                         {
-                            if (!r.Read()) yield break;
-                            poco = (T)factory.Map(r, instance);
-                        }
-                        catch (Exception x)
-                        {
-                            OnExceptionInternal(x);
-                            throw;
-                        }
+                            T poco;
+                            try
+                            {
+                                if (!r.Read()) yield break;
+                                poco = (T)factory.Map(r, instance);
+                            }
+                            catch (Exception x)
+                            {
+                                OnExceptionInternal(x);
+                                throw;
+                            }
 
-                        yield return poco;
+                            yield return poco;
+                        }
                     }
                 }
             }
@@ -935,7 +986,7 @@ namespace NPoco
             }
         }
 
-        private IEnumerable<T> ReadOneToMany<T>(T instance, DbDataReader r, Expression<Func<T, IList>> listExpression, Func<T, object[]> idFunc)
+        private IEnumerable<T> ReadOneToMany<T>(T instance, DbDataReader r, DbCommand cmd, Expression<Func<T, IList>> listExpression, Func<T, object[]> idFunc)
         {
             Func<T, IList> listFunc = null;
             PocoMember pocoMember = null;
@@ -943,56 +994,59 @@ namespace NPoco
 
             try
             {
-                using (r)
+                using (cmd)
                 {
-                    var pocoData = PocoDataFactory.ForType(typeof (T));
-                    if (listExpression != null)
+                    using (r)
                     {
-                        idFunc = idFunc ?? (x => pocoData.GetPrimaryKeyValues(x));
-                        listFunc = listExpression.Compile();
-                        var key = PocoColumn.GenerateKey(MemberChainHelper.GetMembers(listExpression));
-                        pocoMember = pocoData.Members.FirstOrDefault(x => x.Name == key);
-                        foreignMember = pocoMember != null ? pocoMember.PocoMemberChildren.FirstOrDefault(x => x.Name == pocoMember.ReferenceMemberName && x.ReferenceType == ReferenceType.Foreign) : null;
-                    }
-
-                    var factory = new MappingFactory(pocoData, r);
-                    object prevPoco = null;
-
-                    while (true)
-                    {
-                        T poco;
-                        try
+                        var pocoData = PocoDataFactory.ForType(typeof(T));
+                        if (listExpression != null)
                         {
-                            if (!r.Read()) break;
-                            poco = (T) factory.Map(r, instance);
+                            idFunc = idFunc ?? (x => pocoData.GetPrimaryKeyValues(x));
+                            listFunc = listExpression.Compile();
+                            var key = PocoColumn.GenerateKey(MemberChainHelper.GetMembers(listExpression));
+                            pocoMember = pocoData.Members.FirstOrDefault(x => x.Name == key);
+                            foreignMember = pocoMember != null ? pocoMember.PocoMemberChildren.FirstOrDefault(x => x.Name == pocoMember.ReferenceMemberName && x.ReferenceType == ReferenceType.Foreign) : null;
                         }
-                        catch (Exception x)
+
+                        var factory = new MappingFactory(pocoData, r);
+                        object prevPoco = null;
+
+                        while (true)
                         {
-                            OnExceptionInternal(x);
-                            throw;
+                            T poco;
+                            try
+                            {
+                                if (!r.Read()) break;
+                                poco = (T)factory.Map(r, instance);
+                            }
+                            catch (Exception x)
+                            {
+                                OnExceptionInternal(x);
+                                throw;
+                            }
+
+                            if (prevPoco != null)
+                            {
+                                if (listFunc != null
+                                    && pocoMember != null
+                                    && idFunc(poco).SequenceEqual(idFunc((T)prevPoco)))
+                                {
+                                    OneToManyHelper.SetListValue(listFunc, pocoMember, prevPoco, poco);
+                                    continue;
+                                }
+
+                                OneToManyHelper.SetForeignList(listFunc, foreignMember, prevPoco);
+                                yield return (T)prevPoco;
+                            }
+
+                            prevPoco = poco;
                         }
 
                         if (prevPoco != null)
                         {
-                            if (listFunc != null
-                                && pocoMember != null
-                                && idFunc(poco).SequenceEqual(idFunc((T) prevPoco)))
-                            {
-                                OneToManyHelper.SetListValue(listFunc, pocoMember, prevPoco, poco);
-                                continue;
-                            }
-
                             OneToManyHelper.SetForeignList(listFunc, foreignMember, prevPoco);
                             yield return (T)prevPoco;
                         }
-
-                        prevPoco = poco;
-                    }
-
-                    if (prevPoco != null)
-                    {
-                        OneToManyHelper.SetForeignList(listFunc, foreignMember, prevPoco);
-                        yield return (T)prevPoco;
                     }
                 }
             }
@@ -1037,14 +1091,22 @@ namespace NPoco
             try
             {
                 OpenSharedConnectionInternal();
-                using (var cmd = CreateCommand(_sharedConnection, sql, args))
+                var cmd = CreateCommand(_sharedConnection, sql, args);
+                DbDataReader r;
+                try
                 {
-                    var r = ExecuteDataReader(cmd);
-                    var read = Read<object>(type, null, r);
-                    foreach (var item in read)
-                    {
-                        yield return item;
-                    }
+                    r = ExecuteDataReader(cmd);
+                }
+                catch
+                {
+                    cmd.Dispose();
+                    throw;
+                }
+
+                var read = Read<object>(type, null, r, cmd);
+                foreach (var item in read)
+                {
+                    yield return item;
                 }
             }
             finally
@@ -1063,15 +1125,24 @@ namespace NPoco
             try
             {
                 OpenSharedConnectionInternal();
-                using (var cmd = CreateCommand(_sharedConnection, sql, args))
+                var cmd = CreateCommand(_sharedConnection, sql, args);
+                DbDataReader r;
+                try
                 {
-                    var r = ExecuteDataReader(cmd);
-                    var read = listExpression != null ? ReadOneToMany(instance, r, listExpression, idFunc) : Read<T>(typeof(T), instance, r);
-                    foreach (var item in read)
-                    {
-                        yield return item;
-                    }
+                    r = ExecuteDataReader(cmd);
                 }
+                catch
+                {
+                    cmd.Dispose();
+                    throw;
+                }
+
+                var read = listExpression != null ? ReadOneToMany(instance, r, cmd, listExpression, idFunc) : Read<T>(typeof(T), instance, r, cmd);
+                foreach (var item in read)
+                {
+                    yield return item;
+                }
+
             }
             finally
             {
@@ -1278,7 +1349,7 @@ namespace NPoco
         {
             var index = 0;
             var pd = PocoDataFactory.ForType(typeof (T));
-            var primaryKeyValuePairs = GetPrimaryKeyValues(pd, pd.TableInfo.PrimaryKey, primaryKey, false);
+            var primaryKeyValuePairs = GetPrimaryKeyValues(pd, pd.TableInfo.PrimaryKey, primaryKey, primaryKey is T);
             var sql = AutoSelectHelper.AddSelectClause(this, typeof(T), string.Format("WHERE {0}", BuildPrimaryKeySql(primaryKeyValuePairs, ref index)));
             var args = primaryKeyValuePairs.Select(x => x.Value).ToArray();
             return new Sql(true, sql, args);
@@ -1499,9 +1570,10 @@ namespace NPoco
             foreach (var pocoColumn in pd.Columns.Values)
             {
                 // Don't update the primary key, but grab the value if we don't have it
-                if (primaryKeyValue == null && primaryKeyValuePairs.ContainsKey(pocoColumn.ColumnName))
-                {
-                    primaryKeyValuePairs[pocoColumn.ColumnName] = ProcessMapper(pocoColumn, pocoColumn.GetValue(poco));
+                if (primaryKeyValuePairs.ContainsKey(pocoColumn.ColumnName))
+                { 
+                    if (primaryKeyValue == null)
+                         primaryKeyValuePairs[pocoColumn.ColumnName] = this.ProcessMapper(pocoColumn, pocoColumn.GetValue(poco));
                     continue;
                 }
 
@@ -1515,7 +1587,7 @@ namespace NPoco
                 if (!pocoColumn.VersionColumn && columns != null && !columns.Contains(pocoColumn.ColumnName, StringComparer.OrdinalIgnoreCase))
                     continue;
 
-                object value = pocoColumn.GetColumnValue(pd, poco, ProcessMapper);
+                object value = pocoColumn.GetColumnValue(pd, poco, this.ProcessMapper);
 
                 if (pocoColumn.VersionColumn)
                 {
@@ -1619,7 +1691,7 @@ namespace NPoco
             foreach (var primaryKeyValuePair in keys)
             {
                 var col = pd.Columns[primaryKeyValuePair];
-                primaryKeyValuePairs[primaryKeyValuePair] = ProcessMapper(col, primaryKeyValuePairs[primaryKeyValuePair]);
+                primaryKeyValuePairs[primaryKeyValuePair] = this.ProcessMapper(col, primaryKeyValuePairs[primaryKeyValuePair]);
             }
             return primaryKeyValuePairs;
         }
@@ -1877,8 +1949,18 @@ namespace NPoco
             return sb.ToString();
         }
 
-        private MapperCollection _mappers = new MapperCollection();
-        public MapperCollection Mappers { get { return _mappers; } }
+        private List<IInterceptor> _interceptors;
+        public List<IInterceptor> Interceptors
+        {
+            get { return _interceptors ?? (_interceptors = new List<IInterceptor>()); }
+        }
+
+        private MapperCollection _mappers;
+        public MapperCollection Mappers
+        {
+            get { return _mappers ?? (_mappers = new MapperCollection()); }
+            set { _mappers = value; }
+        }
 
         private IPocoDataFactory _pocoDataFactory;
         public IPocoDataFactory PocoDataFactory
@@ -1900,6 +1982,7 @@ namespace NPoco
         private object[] _lastArgs;
         private string _paramPrefix = "@";
         private VersionExceptionHandling _versionException = VersionExceptionHandling.Exception;
+        private readonly bool _connectionPassedIn;
 
         internal int ExecuteNonQueryHelper(DbCommand cmd)
         {
@@ -1925,30 +2008,47 @@ namespace NPoco
             return r;
         }
 
-        internal object ProcessMapper(PocoColumn pc, object value)
-        {
-            var converter = Mappers.Find(x => x.GetToDbConverter(pc.ColumnType, pc.MemberInfoData.MemberInfo));
-            return converter != null ? converter(value) : ProcessDefaultMappings(pc, value);
-        }
+        int IDatabaseHelpers.ExecuteNonQueryHelper(DbCommand cmd) => ExecuteNonQueryHelper(cmd);
 
-        internal static bool IsEnum(MemberInfoData memberInfo)
+        object IDatabaseHelpers.ExecuteScalarHelper(DbCommand cmd) => ExecuteScalarHelper(cmd);
+
+        DbDataReader IDatabaseHelpers.ExecuteReaderHelper(DbCommand cmd) => ExecuteReaderHelper(cmd);
+
+#if !NET35 && !NET40
+        System.Threading.Tasks.Task<int> IDatabaseHelpers.ExecuteNonQueryHelperAsync(DbCommand cmd) => ExecuteNonQueryHelperAsync(cmd);
+
+        System.Threading.Tasks.Task<object> IDatabaseHelpers.ExecuteScalarHelperAsync(DbCommand cmd) => ExecuteScalarHelperAsync(cmd);
+
+        System.Threading.Tasks.Task<DbDataReader> IDatabaseHelpers.ExecuteReaderHelperAsync(DbCommand cmd) => ExecuteReaderHelperAsync(cmd);
+#endif
+
+        public static bool IsEnum(MemberInfoData memberInfo)
         {
             var underlyingType = Nullable.GetUnderlyingType(memberInfo.MemberType);
             return memberInfo.MemberType.GetTypeInfo().IsEnum || (underlyingType != null && underlyingType.GetTypeInfo().IsEnum);
         }
+    }
 
-        private object ProcessDefaultMappings(PocoColumn pocoColumn, object value)
+    internal static class ProcessMapperExtensions
+    {
+        internal static object ProcessMapper(this IDatabase database, PocoColumn pc, object value)
+        {
+            var converter = database.Mappers.Find(x => x.GetToDbConverter(pc.ColumnType, pc.MemberInfoData.MemberInfo));
+            return converter != null ? converter(value) : ProcessDefaultMappings(database, pc, value);
+        }
+        
+        internal static object ProcessDefaultMappings(IDatabase database, PocoColumn pocoColumn, object value)
         {
             if (pocoColumn.SerializedColumn)
             {
                 return DatabaseFactory.ColumnSerializer.Serialize(value);
             }
-            if (pocoColumn.ColumnType == typeof (string) && IsEnum(pocoColumn.MemberInfoData) && value != null)
+            if (pocoColumn.ColumnType == typeof(string) && Database.IsEnum(pocoColumn.MemberInfoData) && value != null)
             {
                 return value.ToString();
             }
 
-            return _dbType.ProcessDefaultMappings(pocoColumn, value);
+            return database.DatabaseType.ProcessDefaultMappings(pocoColumn, value);
         }
     }
 }

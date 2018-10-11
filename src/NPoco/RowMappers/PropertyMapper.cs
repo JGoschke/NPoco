@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Linq;
+using System.Reflection;
 
 namespace NPoco.RowMappers
 {
@@ -42,7 +43,9 @@ namespace NPoco.RowMappers
                 _mappingOntoExistingInstance = true;
             }
 
-            _mapPlan(dataReader, context.Instance);
+            object[] values = new object[dataReader.FieldCount];
+            dataReader.GetValues(values);
+            _mapPlan(dataReader, values, context.Instance);
 
             var result = context.Instance as IOnLoaded;
             if (result != null)
@@ -53,16 +56,16 @@ namespace NPoco.RowMappers
             return context.Instance;
         }
 
-        public delegate bool MapPlan(DbDataReader reader, object instance);
+        public delegate bool MapPlan(DbDataReader dataReader, object[] values, object instance);
 
         private MapPlan BuildMapPlan(DbDataReader dataReader, PocoData pocoData)
         {
             var plans = _groupedNames.SelectMany(x => BuildMapPlans(x, dataReader, pocoData, pocoData.Members)).ToArray();
-            return (reader, instance) =>
+            return (reader, values, instance) =>
             {
                 foreach (MapPlan plan in plans)
                 {
-                    plan(reader, instance);
+                    plan(reader, values, instance);
                 }
                 return true;
             };
@@ -84,19 +87,19 @@ namespace NPoco.RowMappers
                 if (memberInfoType.IsAClass() || pocoMember.IsDynamic)
                 {
                     var children = PocoDataBuilder.IsDictionaryType(memberInfoType)
-                        ? CreateDynamicDictionaryPocoMembers(groupedName.SubItems, pocoData)
+                        ? CreateDynamicDictionaryPocoMembers(groupedName.SubItems, pocoData, memberInfoType)
                         : pocoMember.PocoMemberChildren;
 
                     var subPlans = groupedName.SubItems.SelectMany(x => BuildMapPlans(x, dataReader, pocoData, children)).ToArray();
 
-                    yield return (reader, instance) =>
+                    yield return (reader, values, instance) =>
                     {
                         var newObject = pocoMember.IsList ? pocoMember.Create(dataReader) : (pocoMember.GetValue(instance) ?? pocoMember.Create(dataReader));
 
                         var shouldSetNestedObject = false;
                         foreach (var subPlan in subPlans)
                         {
-                            shouldSetNestedObject |= subPlan(reader, newObject);
+                            shouldSetNestedObject |= subPlan(reader, values, newObject);
                         }
 
                         if (shouldSetNestedObject)
@@ -120,7 +123,7 @@ namespace NPoco.RowMappers
                 var destType = pocoMember.MemberInfoData.MemberType;
                 var defaultValue = MappingHelper.GetDefault(destType);
                 var converter = GetConverter(pocoData, pocoMember.PocoColumn, dataReader.GetFieldType(groupedName.Key.Pos), destType);
-                yield return (reader, instance) => MapValue(groupedName, reader, converter, instance, pocoMember.PocoColumn, defaultValue);
+                yield return (reader, values, instance) => MapValue(groupedName, values, converter, instance, pocoMember.PocoColumn, defaultValue);
             }
         }
 
@@ -130,12 +133,12 @@ namespace NPoco.RowMappers
                 || string.Equals(value, name.Replace("_", ""), StringComparison.OrdinalIgnoreCase);
         }
 
-        private bool MapValue(GroupResult<PosName> posName, DbDataReader reader, Func<object, object> converter, object instance, PocoColumn pocoColumn, object defaultValue)
+        private bool MapValue(GroupResult<PosName> posName, object[] values, Func<object, object> converter, object instance, PocoColumn pocoColumn, object defaultValue)
         {
-            if (!reader.IsDBNull(posName.Key.Pos))
+            var value = values[posName.Key.Pos];
+            if (!Equals(value, DBNull.Value))
             {
-                var value = converter != null ? converter(reader.GetValue(posName.Key.Pos)) : reader.GetValue(posName.Key.Pos);
-                pocoColumn.SetValue(instance, value);
+                pocoColumn.SetValue(instance, converter != null ? converter(value) : value);
                 return true;
             }
 
@@ -147,16 +150,32 @@ namespace NPoco.RowMappers
             return false;
         }
 
-        private static List<PocoMember> CreateDynamicDictionaryPocoMembers(IEnumerable<GroupResult<PosName>> subItems, PocoData pocoData)
+        private static List<PocoMember> CreateDynamicDictionaryPocoMembers(IEnumerable<GroupResult<PosName>> subItems, PocoData pocoData, Type type)
         {
-            return subItems.Select(x => new DynamicPocoMember(pocoData.Mapper)
+            var isDict = type != typeof(object);
+            var dataType = isDict ? type.GetGenericArguments().Last() : type;
+            
+            return subItems.Select(x =>
             {
-                MemberInfoData = new MemberInfoData(x.Item, typeof(object), typeof(IDictionary<string, object>)),
-                PocoColumn = new ExpandoColumn
+                var member = new DynamicPocoMember
                 {
-                    ColumnName = x.Item
+                    MemberInfoData = new MemberInfoData(x.Item, dataType, type),
+                    PocoColumn = new ExpandoColumn
+                    {
+                        ColumnName = x.Item
+                    }
+                };
+
+                if (isDict)
+                {
+                    var pocoDataBuilder = new PocoDataBuilder(dataType, pocoData.Mapper);
+                    member.PocoMemberChildren = pocoDataBuilder.GetPocoMembers(pocoDataBuilder.GetColumnInfos(dataType), new List<MemberInfo>()).Select(plan => plan(pocoData.TableInfo)).ToList();
+                    member.SetDynamicMemberAccessor(new FastCreate(dataType, pocoData.Mapper));
                 }
-            }).Cast<PocoMember>().ToList();
+
+                return (PocoMember)member;
+
+            }).ToList();
         }
     }
 }

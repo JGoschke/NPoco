@@ -217,27 +217,46 @@ namespace NPoco
             try
             {
                 OpenSharedConnectionInternal();
-                using (var cmd = CreateCommand(_sharedConnection, sql, args))
+                DbCommand cmd = CreateCommand(_sharedConnection, sql, args); 
+                DbDataReader r;
+                try
                 {
-                    DbDataReader r;
-                    try
-                    {
-                        r = await ExecuteReaderHelperAsync(cmd).ConfigureAwait(false);
-                    }
-                    catch (Exception x)
-                    {
-                        OnExceptionInternal(x);
-                        throw;
-                    }
-
-                    return listExpression != null ? ReadOneToMany(instance, r, listExpression, idFunc) : Read<T>(typeof(T), instance, r);
+                    r = await ExecuteReaderHelperAsync(cmd).ConfigureAwait(false);
                 }
+                catch (Exception x)
+                {
+                    cmd.Dispose();
+                    OnExceptionInternal(x);
+                    throw;
+                }
+
+                return listExpression != null ? ReadOneToMany(instance, r, cmd, listExpression, idFunc) : Read<T>(typeof(T), instance, r, cmd);
             }
             catch
             {
                 CloseSharedConnectionInternal();
                 throw;
             }
+        }
+
+        public async Task<T> SingleAsync<T>(string sql, params object[] args)
+        {
+            return (await QueryAsync<T>(sql, args).ConfigureAwait(false)).Single();
+        }
+
+        public async Task<T> SingleAsync<T>(Sql sql)
+        {
+            return (await QueryAsync<T>(sql).ConfigureAwait(false)).Single();
+        }
+
+        public async Task<T> SingleOrDefaultAsync<T>(string sql, params object[] args)
+        {
+            return (await QueryAsync<T>(sql, args).ConfigureAwait(false)).SingleOrDefault();
+        }
+
+        public async Task<T> SingleOrDefaultAsync<T>(Sql sql)
+        {
+            return (await QueryAsync<T>(sql).ConfigureAwait(false)).SingleOrDefault();
         }
 
         public async Task<T> SingleByIdAsync<T>(object primaryKey)
@@ -250,6 +269,26 @@ namespace NPoco
         {
             var sql = GenerateSingleByIdSql<T>(primaryKey);
             return (await QueryAsync<T>(sql).ConfigureAwait(false)).SingleOrDefault();
+        }
+
+        public async Task<T> FirstAsync<T>(string sql, params object[] args)
+        {
+            return (await QueryAsync<T>(sql, args).ConfigureAwait(false)).First();
+        }
+
+        public async Task<T> FirstAsync<T>(Sql sql)
+        {
+            return (await QueryAsync<T>(sql).ConfigureAwait(false)).First();
+        }
+
+        public async Task<T> FirstOrDefaultAsync<T>(string sql, params object[] args)
+        {
+            return (await QueryAsync<T>(sql, args).ConfigureAwait(false)).FirstOrDefault();
+        }
+
+        public async Task<T> FirstOrDefaultAsync<T>(Sql sql)
+        {
+            return (await QueryAsync<T>(sql).ConfigureAwait(false)).FirstOrDefault();
         }
 
         public Task<int> ExecuteAsync(string sql, params object[] args)

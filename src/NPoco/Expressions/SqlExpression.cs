@@ -98,11 +98,11 @@ namespace NPoco.Expressions
         }
 
         private string sep = string.Empty;
+        protected string EscapeChar = "\\";
         private PocoData _pocoData;
         private readonly IDatabase _database;
         private readonly DatabaseType _databaseType;
         private bool PrefixFieldWithTableName { get; set; }
-        private bool WhereStatementWithoutWhereString { get; set; }
         private Type _type { get; set; }
 
         public SqlExpression(IDatabase database, PocoData pocoData, bool prefixTableName)
@@ -112,7 +112,6 @@ namespace NPoco.Expressions
             _database = database;
             _databaseType = database.DatabaseType;
             PrefixFieldWithTableName = prefixTableName;
-            WhereStatementWithoutWhereString = false;
             paramPrefix = "@";
             Context = new SqlExpressionContext(this);
         }
@@ -170,29 +169,6 @@ namespace NPoco.Expressions
         }
 
         /// <summary>
-        /// Clear select expression. All properties will be selected.
-        /// </summary>
-        //public virtual SqlExpression<T> Select()
-        //{
-        //    return Select(string.Empty);
-        //}
-
-        /// <summary>
-        /// set the specified selectExpression.
-        /// </summary>
-        /// <param name='selectExpression'>
-        /// raw Select expression: "Select SomeField1, SomeField2 from SomeTable"
-        /// </param>
-        //public virtual SqlExpression<T> Select(string selectExpression)
-        //{
-        //    if (!string.IsNullOrEmpty(selectExpression))
-        //    {
-        //        this.selectExpression = selectExpression;
-        //    }
-        //    return this;
-        //}
-
-        /// <summary>
         /// Fields to be selected.
         /// </summary>
         /// <param name='fields'>
@@ -227,12 +203,6 @@ namespace NPoco.Expressions
             return SelectProjection(fields);
         }
 
-        //public virtual SqlExpression<T> Where()
-        //{
-        //    if (underlyingExpression != null) underlyingExpression = null; //Where() clears the expression
-        //    return Where(string.Empty);
-        //}
-
         public virtual SqlExpression<T> Where(string sqlFilter, params object[] filterParams)
         {
             if (string.IsNullOrEmpty(sqlFilter))
@@ -240,6 +210,13 @@ namespace NPoco.Expressions
 
             sqlFilter = ParameterHelper.ProcessParams(sqlFilter, filterParams, _params);
 
+            appendSqlFilter(sqlFilter);
+
+            return this;
+        }
+
+        private void appendSqlFilter(string sqlFilter)
+        {
             if (string.IsNullOrEmpty(whereExpression))
             {
                 whereExpression = "WHERE " + sqlFilter;
@@ -248,8 +225,6 @@ namespace NPoco.Expressions
             {
                 whereExpression += " AND " + sqlFilter;
             }
-
-            return this;
         }
 
         public string On<T2>(Expression<Func<T, T2, bool>> predicate)
@@ -283,31 +258,21 @@ namespace NPoco.Expressions
                 else
                     underlyingExpression = underlyingExpression.And(predicate);
 
-                ProcessInternalExpression();
+                ProcessInternalExpression(predicate);
             }
             return this;
         }
 
-        //public virtual SqlExpression<T> Or(Expression<Func<T, bool>> predicate)
-        //{
-        //    if (predicate != null)
-        //    {
-        //        if (underlyingExpression == null)
-        //            underlyingExpression = predicate;
-        //        else
-        //            underlyingExpression = underlyingExpression.Or(predicate);
-
-        //        ProcessInternalExpression();
-        //    }
-        //    return this;
-        //}
-
-        private void ProcessInternalExpression()
+        private void ProcessInternalExpression(Expression<Func<T, bool>> predicate)
         {
             sep = " ";
-            var exp = PartialEvaluator.Eval(underlyingExpression, CanBeEvaluatedLocally);
-            whereExpression = Visit(exp).ToString();
-            if (!string.IsNullOrEmpty(whereExpression)) whereExpression = (WhereStatementWithoutWhereString ? "" : "WHERE ") + whereExpression;
+            var exp = PartialEvaluator.Eval(predicate, CanBeEvaluatedLocally);
+            var sqlFilter = Visit(exp).ToString();
+
+            if (!string.IsNullOrEmpty(sqlFilter))
+            {
+                appendSqlFilter(sqlFilter);
+            }
         }
 
         private bool CanBeEvaluatedLocally(Expression expression)
@@ -334,17 +299,6 @@ namespace NPoco.Expressions
                    expression.NodeType != ExpressionType.Lambda;
         }
 
-        //public virtual SqlExpression<T> GroupBy()
-        //{
-        //    return GroupBy(string.Empty);
-        //}
-
-        //public virtual SqlExpression<T> GroupBy(string groupBy)
-        //{
-        //    this.groupBy = groupBy;
-        //    return this;
-        //}
-
         public virtual SqlExpression<T> GroupBy<TKey>(Expression<Func<T, TKey>> keySelector)
         {
             sep = string.Empty;
@@ -352,51 +306,6 @@ namespace NPoco.Expressions
             if (!string.IsNullOrEmpty(groupBy)) groupBy = string.Format("GROUP BY {0}", groupBy);
             return this;
         }
-
-        //public virtual SqlExpression<T> Having()
-        //{
-        //    return Having(string.Empty);
-        //}
-
-        //public virtual SqlExpression<T> Having(string sqlFilter, params object[] filterParams)
-        //{
-        //    havingExpression = !string.IsNullOrEmpty(sqlFilter) ? sqlFilter : string.Empty;
-        //    foreach (var filterParam in filterParams)
-        //    {
-        //        CreateParam(filterParam);
-        //    }
-        //    if (!string.IsNullOrEmpty(havingExpression)) havingExpression = "HAVING " + havingExpression;
-        //    return this;
-        //}
-
-        //public virtual SqlExpression<T> Having(Expression<Func<T, bool>> predicate)
-        //{
-
-        //    if (predicate != null)
-        //    {
-        //        sep = " ";
-        //        havingExpression = Visit(predicate).ToString();
-        //        if (!string.IsNullOrEmpty(havingExpression)) havingExpression = "HAVING " + havingExpression;
-        //    }
-        //    else
-        //        havingExpression = string.Empty;
-
-        //    return this;
-        //}
-
-
-
-        //public virtual SqlExpression<T> OrderBy()
-        //{
-        //    return OrderBy(string.Empty);
-        //}
-
-        //public virtual SqlExpression<T> OrderBy(string orderBy)
-        //{
-        //    orderByProperties.Clear();
-        //    this.orderBy = orderBy;
-        //    return this;
-        //}
 
         public virtual SqlExpression<T> OrderBy<TKey>(Expression<Func<T, TKey>> keySelector)
         {
@@ -493,29 +402,6 @@ namespace NPoco.Expressions
         }
 
         /// <summary>
-        /// Clear Sql Limit clause
-        /// </summary>
-        //public virtual SqlExpression<T> Limit()
-        //{
-        //    Skip = null;
-        //    Rows = null;
-        //    return this;
-        //}
-
-
-        /// <summary>
-        /// Fields to be updated.
-        /// </summary>
-        /// <param name='updatefields'>
-        /// IList<string> containing Names of properties to be updated
-        /// </param>
-        //public virtual SqlExpression<T> Update(IList<string> updateFields)
-        //{
-        //    this.updateFields = updateFields;
-        //    return this;
-        //}
-
-        /// <summary>
         /// Fields to be updated.
         /// </summary>
         /// <param name='fields'>
@@ -534,52 +420,6 @@ namespace NPoco.Expressions
             return this;
         }
 
-        /// <summary>
-        /// Clear UpdateFields list ( all fields will be updated)
-        /// </summary>
-        //public virtual SqlExpression<T> Update()
-        //{
-        //    this.updateFields = new List<string>();
-        //    return this;
-        //}
-
-        /// <summary>
-        /// Fields to be inserted.
-        /// </summary>
-        /// <param name='fields'>
-        /// x=> x.SomeProperty1 or x=> new{ x.SomeProperty1, x.SomeProperty2}
-        /// </param>
-        /// <typeparam name='TKey'>
-        /// objectWithProperties
-        /// </typeparam>
-        //public virtual SqlExpression<T> Insert<TKey>(Expression<Func<T, TKey>> fields)
-        //{
-        //    sep = string.Empty;
-        //    Context.InsertFields = Visit(fields).ToString().Split(',').ToList();
-        //    return this;
-        //}
-
-        /// <summary>
-        /// fields to be inserted.
-        /// </summary>
-        /// <param name='insertFields'>
-        /// IList&lt;string&gt; containing Names of properties to be inserted
-        /// </param>
-        //public virtual SqlExpression<T> Insert(IList<string> insertFields)
-        //{
-        //    this.insertFields = insertFields;
-        //    return this;
-        //}
-
-        /// <summary>
-        /// Clear InsertFields list ( all fields will be inserted)
-        /// </summary>
-        //public virtual SqlExpression<T> Insert()
-        //{
-        //    this.insertFields = new List<string>();
-        //    return this;
-        //}
-
         protected virtual string ToDeleteStatement()
         {
             return string.Format("DELETE {0} FROM {1} {2}",
@@ -596,11 +436,15 @@ namespace NPoco.Expressions
         protected virtual string ToUpdateStatement(T item, bool excludeDefaults)
         {
             var setFields = new StringBuilder();
+            var primaryKeys = _pocoData.TableInfo.PrimaryKey.Split(',');
 
             foreach (var fieldDef in _pocoData.Columns)
             {
+                if (_pocoData.TableInfo.AutoIncrement && primaryKeys.Contains(fieldDef.Value.ColumnName, StringComparer.OrdinalIgnoreCase))
+                    continue;
+
                 if (Context.UpdateFields.Count > 0 && !Context.UpdateFields.Contains(fieldDef.Value.MemberInfoData.Name)) continue; // added
-                object value = fieldDef.Value.GetValue(item);
+                object value = fieldDef.Value.GetColumnValue(_pocoData, item, (pocoColumn, val) => ProcessMapperExtensions.ProcessMapper(_database, pocoColumn, val));
                 if (_database.Mappers != null)
                 {
                     value = _database.Mappers.FindAndExecute(x => x.GetToDbConverter(fieldDef.Value.ColumnType, fieldDef.Value.MemberInfoData.MemberInfo), value);
@@ -645,11 +489,6 @@ namespace NPoco.Expressions
 
             return applyPaging ? ApplyPaging(sql.ToString(), ModelDef.QueryColumns.Select(x=> new[] { x.Value }), new Dictionary<string, JoinData>()) : sql.ToString();
         }
-
-        //public virtual string ToCountStatement()
-        //{
-        //    return OrmLiteConfig.DialectProvider.ToCountStatement(modelDef.ModelType, WhereExpression, null);
-        //}
 
         private string GetSelectExpression(bool distinct)
         {
@@ -888,15 +727,19 @@ namespace NPoco.Expressions
         {
             var member = m.Expression as MemberExpression;
             return member != null
-                && (m.Member.Name == "HasValue")
                 && member.Type.GetTypeInfo().IsGenericType && member.Type.GetGenericTypeDefinition() == typeof(Nullable<>);
         }
 
         protected virtual object VisitBinary(BinaryExpression b)
         {
+            // Fix VB and CompareString
+            b = FixExpressionForVb(b);
+
             object left, right;
+            bool switchLeftRight = false;
             var operand = BindOperant(b.NodeType);   //sep= " " ??
-            if (operand == "AND" || operand == "OR")
+
+            if (b.NodeType == ExpressionType.AndAlso || b.NodeType == ExpressionType.OrElse)
             {
                 var m = b.Left as MemberExpression;
                 if (m != null && m.Expression != null
@@ -905,6 +748,11 @@ namespace NPoco.Expressions
                 else
                     left = Visit(b.Left);
 
+                if (left is NullableMemberAccess)
+                {
+                    left = new PartialSqlString("(" + left + " is not null)");
+                }
+
                 m = b.Right as MemberExpression;
                 if (m != null && m.Expression != null
                     && m.Expression.NodeType == ExpressionType.Parameter)
@@ -912,15 +760,20 @@ namespace NPoco.Expressions
                 else
                     right = Visit(b.Right);
 
-                if (left as PartialSqlString == null && right as PartialSqlString == null)
+                if (right is NullableMemberAccess)
+                {
+                    right = new PartialSqlString("(" + right + " is not null)");
+                }
+
+                if (!(left is PartialSqlString) && !(right is PartialSqlString))
                 {
                     var result = Expression.Lambda(b).Compile().DynamicInvoke();
                     return new PartialSqlString(CreateParam(result));
                 }
 
-                if (left as PartialSqlString == null)
+                if (!(left is PartialSqlString))
                     left = ((bool)left) ? GetTrueExpression() : GetFalseExpression();
-                if (right as PartialSqlString == null)
+                if (!(right is PartialSqlString))
                     right = ((bool)right) ? GetTrueExpression() : GetFalseExpression();
             }
             else
@@ -928,62 +781,95 @@ namespace NPoco.Expressions
                 left = Visit(b.Left);
                 right = Visit(b.Right);
 
-                if (left as EnumMemberAccess != null && right as PartialSqlString == null)
-                {
-                    var pc = ((EnumMemberAccess)left).PocoColumn;
+                var isLeftMemberAccessString = left.CanBeCastTo<MemberAccessString>(out var leftMemberAccessString);
+                var isRightMemberAccessString = right.CanBeCastTo<MemberAccessString>(out var rightMemberAccessString);
 
-                    long numvericVal;
+                // Enums
+                if (left.CanBeCastTo<EnumMemberAccess>(out var leftEnumMemberAccess) && !(right is PartialSqlString))
+                {
+                    var pc = leftEnumMemberAccess.PocoColumn;
                     if (pc.ColumnType == typeof(string))
                         right = CreateParam(Enum.Parse(GetMemberInfoTypeForEnum(pc), right.ToString()).ToString());
-                    else if (Int64.TryParse(right.ToString(), out numvericVal))
+                    else if (Int64.TryParse(right.ToString(), out long numvericVal))
                         right = CreateParam(Enum.ToObject(GetMemberInfoTypeForEnum(pc), numvericVal));
                     else
                         right = CreateParam(right);
                 }
-                else if (left as NullableMemberAccess != null && right as PartialSqlString == null)
+                else if (right.CanBeCastTo<EnumMemberAccess>(out var rightEnumMemberAccess) && !(left is PartialSqlString))
                 {
-                    operand = ((bool)right) ? "is not" : "is";
-                    right = new PartialSqlString("null");
-                }
-                else if (right as EnumMemberAccess != null && left as PartialSqlString == null)
-                {
-                    var pc = ((EnumMemberAccess)right).PocoColumn;
-
-                    //enum value was returned by Visit(b.Left)
-                    long numvericVal;
+                    var pc = rightEnumMemberAccess.PocoColumn;
                     if (pc.ColumnType == typeof(string))
                         left = CreateParam(Enum.Parse(GetMemberInfoTypeForEnum(pc), left.ToString()).ToString());
-                    else if (Int64.TryParse(left.ToString(), out numvericVal))
+                    else if (Int64.TryParse(left.ToString(), out long numvericVal))
                         left = CreateParam(Enum.ToObject(GetMemberInfoTypeForEnum(pc), numvericVal));
                     else
                         left = CreateParam(left);
                 }
-                else if (left as MemberAccessString != null
-                    && right is int
-                    && new [] { typeof(char), typeof(char?) }.Contains(((MemberAccessString)left).PocoColumn.MemberInfoData.MemberType))
+                // Nullable Members
+                else if (left is NullableMemberAccess && !(right is PartialSqlString))
+                {
+                    operand = ((bool)right) ? "is not" : "is";
+                    right = new PartialSqlString("null");
+                }
+                else if (right is NullableMemberAccess && !(left is PartialSqlString))
+                {
+                    operand = ((bool)left) ? "is not" : "is";
+                    left = new PartialSqlString("null");
+                    switchLeftRight = true;
+                }
+                // Chars
+                else if (isLeftMemberAccessString && right is int
+                    && new [] { typeof(char), typeof(char?) }.Contains(leftMemberAccessString.PocoColumn.MemberInfoData.MemberType))
                 {
                     right = CreateParam(Convert.ToChar(right));
                 }
-                else if (left as MemberAccessString != null
-                    && right is string
-                    && ((MemberAccessString) left).PocoColumn.ColumnType == typeof (AnsiString))
+                else if (isRightMemberAccessString && left is int
+                         && new[] { typeof(char), typeof(char?) }.Contains(rightMemberAccessString.PocoColumn.MemberInfoData.MemberType))
+                {
+                    left = CreateParam(Convert.ToChar(left));
+                }
+                // AnsiString
+                else if (isLeftMemberAccessString && right is string && leftMemberAccessString.PocoColumn.ColumnType == typeof (AnsiString))
                 {
                     right = CreateParam(new AnsiString((string)right));
                 }
-                else if (left as PartialSqlString == null && right as PartialSqlString == null)
+                else if (isRightMemberAccessString && left is string && rightMemberAccessString.PocoColumn.ColumnType == typeof(AnsiString))
+                {
+                    left = CreateParam(new AnsiString((string)left));
+                }
+                // ValueObject
+                else if (isLeftMemberAccessString && leftMemberAccessString.PocoColumn.ValueObjectColumn)
+                {
+                    right = CreateParam(leftMemberAccessString.PocoColumn.GetValueObjectValue(right));
+                }
+                else if (isRightMemberAccessString && rightMemberAccessString.PocoColumn.ValueObjectColumn)
+                {
+                    left = CreateParam(rightMemberAccessString.PocoColumn.GetValueObjectValue(left));
+                }
+                else if (!(left is PartialSqlString) && !(right is PartialSqlString))
                 {
                     var result = Expression.Lambda(b).Compile().DynamicInvoke();
                     return result;
                 }
-                else if (left as PartialSqlString == null)
+                else if (!(left is PartialSqlString))
                     left = CreateParam(left);
-                else if (right as PartialSqlString == null)
+                else if (!(right is PartialSqlString))
                     right = CreateParam(right);
 
             }
 
-            if (operand == "=" && right.ToString().Equals("null", StringComparison.OrdinalIgnoreCase)) operand = "is";
-            else if (operand == "<>" && right.ToString().Equals("null", StringComparison.OrdinalIgnoreCase)) operand = "is not";
+            if (operand == "=" && right.ToString().Equals("null", StringComparison.OrdinalIgnoreCase)) { operand = "is"; }
+            else if (operand == "=" && left.ToString().Equals("null", StringComparison.OrdinalIgnoreCase)) { operand = "is"; switchLeftRight = true; }
+            else if (operand == "<>" && right.ToString().Equals("null", StringComparison.OrdinalIgnoreCase)) { operand = "is not"; }
+            else if (operand == "<>" && left.ToString().Equals("null", StringComparison.OrdinalIgnoreCase)) { operand = "is not"; switchLeftRight = true; }
+
+            // Switch left and right for situtations like is null
+            if (switchLeftRight)
+            {
+                var saveleft = left;
+                left = right;
+                right = saveleft;
+            }
 
             switch (operand)
             {
@@ -993,6 +879,23 @@ namespace NPoco.Expressions
                 default:
                     return new PartialSqlString("(" + left + sep + operand + sep + right + ")");
             }
+        }
+
+        private static BinaryExpression FixExpressionForVb(BinaryExpression b)
+        {
+            if (b.Left is MethodCallExpression)
+            {
+                var method = (MethodCallExpression) b.Left;
+                if (method.Method.Name == "CompareString"
+                    && method.Method.DeclaringType.FullName == "Microsoft.VisualBasic.CompilerServices.Operators")
+                {
+                    var left = method.Arguments[0];
+                    var right = method.Arguments[1];
+
+                    return b.NodeType == ExpressionType.Equal ? Expression.Equal(left, right) : Expression.NotEqual(left, right);
+                }
+            }
+            return b;
         }
 
         private static Type GetMemberInfoTypeForEnum(PocoColumn pc)
@@ -1009,8 +912,11 @@ namespace NPoco.Expressions
 
             if (IsNullableMember(m))
             {
+                if (m.Member.Name == "HasValue")
+                {
+                    isNull = true;
+                }
                 m = m.Expression as MemberExpression;
-                isNull = true;
             }
 
             if (m.Expression != null
@@ -1131,7 +1037,7 @@ namespace NPoco.Expressions
         }
 
         List<object> _params = new List<object>();
-        int _paramCounter = 0;
+        
         string paramPrefix;
         private bool _projection;
         public SqlExpressionContext Context { get; private set; }
@@ -1156,7 +1062,7 @@ namespace NPoco.Expressions
 
         protected string CreateParam(object value)
         {
-            string paramPlaceholder = paramPrefix + _paramCounter++;
+            string paramPlaceholder = paramPrefix + _params.Count;
             _params.Add(value);
             return paramPlaceholder;
         }
@@ -1320,10 +1226,10 @@ namespace NPoco.Expressions
             }
         }
 
-        private StringBuilder FlattenList(IEnumerable inArgs, object partialSqlString)
+        private StringBuilder FlattenList(List<object> inArgs, object partialSqlString)
         {
-            StringBuilder sIn = new StringBuilder();
-            foreach (Object e in inArgs)
+            var sIn = new StringBuilder();
+            foreach (object e in inArgs)
             {
                 if (!typeof(ICollection).IsAssignableFrom(e.GetType()))
                 {
@@ -1332,8 +1238,7 @@ namespace NPoco.Expressions
                 }
                 else
                 {
-                    var listArgs = e as ICollection;
-                    foreach (Object el in listArgs)
+                    foreach (object el in (ICollection)e)
                     {
                         var v = FormatParameters(partialSqlString, el);
                         sIn.AppendFormat("{0}{1}", sIn.Length > 0 ? "," : "", CreateParam(v));
@@ -1341,10 +1246,6 @@ namespace NPoco.Expressions
                 }
             }
 
-            if (sIn.Length == 0)
-            {
-                sIn.AppendFormat("select 1 /*poco_dual*/ where 1 = 0");
-            }
             return sIn;
         }
 
@@ -1408,7 +1309,6 @@ namespace NPoco.Expressions
 
         protected virtual string BindOperant(ExpressionType e)
         {
-
             switch (e)
             {
                 case ExpressionType.Equal:
@@ -1439,6 +1339,14 @@ namespace NPoco.Expressions
                     return "MOD";
                 case ExpressionType.Coalesce:
                     return "COALESCE";
+                case ExpressionType.And:
+                    return "&";
+                case ExpressionType.Or:
+                    return "|";
+                case ExpressionType.ExclusiveOr:
+                    return "^";
+                case ExpressionType.Not:
+                    return "~";
                 default:
                     return e.ToString();
             }
@@ -1531,7 +1439,6 @@ namespace NPoco.Expressions
 
         private string BuildInStatement(Expression m, object quotedColName)
         {
-            string statement;
             var member = Expression.Convert(m, typeof(object));
             var lambda = Expression.Lambda<Func<object>>(member);
             var getter = lambda.Compile();
@@ -1539,11 +1446,14 @@ namespace NPoco.Expressions
             if (quotedColName == null)
                 quotedColName = Visit(m);
 
-            var inArgs = getter() as IEnumerable;
+            var inArgs = ((IEnumerable) getter()).Cast<object>().ToList();
+            if (inArgs.Count == 0)
+            {
+                return "1 = 0";
+            }
 
             var sIn = FlattenList(inArgs, quotedColName);
-
-            statement = string.Format("{0} {1} ({2})", quotedColName, "IN", sIn);
+            var statement = string.Format("{0} {1} ({2})", quotedColName, "IN", sIn);
             return statement;
         }
 
@@ -1603,13 +1513,13 @@ namespace NPoco.Expressions
                     statement = string.Format("lower({0})", expression);
                     break;
                 case "StartsWith":
-                    statement = string.Format("upper({0}) like {1}", expression, CreateParam(args[0].ToString().ToUpper() + "%"));
+                    statement = CreateLikeStatement(expression, CreateParam(EscapeParam(args[0]) + "%"));
                     break;
                 case "EndsWith":
-                    statement = string.Format("upper({0}) like {1}", expression, CreateParam("%" + args[0].ToString().ToUpper()));
+                    statement = CreateLikeStatement(expression, CreateParam("%" + EscapeParam(args[0])));
                     break;
                 case "Contains":
-                    statement = string.Format("upper({0}) like {1}", expression, CreateParam("%" + args[0].ToString().ToUpper() + "%"));
+                    statement = CreateLikeStatement(expression, CreateParam("%" + EscapeParam(args[0]) + "%"));
                     break;
                 case "Substring":
                     var startIndex = Int32.Parse(args[0].ToString()) + 1;
@@ -1629,6 +1539,20 @@ namespace NPoco.Expressions
             return new PartialSqlString(statement);
         }
 
+        protected virtual string CreateLikeStatement(PartialSqlString expression, string param)
+        {
+            return string.Format("upper({0}) like {1} escape '{2}'", expression, param, EscapeChar);
+        }
+
+        protected virtual string EscapeParam(object par)
+        {
+            var param = par.ToString().ToUpper();
+            param = param
+                .Replace(EscapeChar, EscapeChar + EscapeChar)
+                .Replace("_", EscapeChar + "_");
+            return param;
+        }
+
         // Easy to override
         protected virtual string SubstringStatement(PartialSqlString columnName, int startIndex, int length)
         {
@@ -1637,7 +1561,6 @@ namespace NPoco.Expressions
             else
                 return string.Format("substring({0},{1},8000)", columnName, CreateParam(startIndex));
         }
-
     }
 
     public class PartialSqlString

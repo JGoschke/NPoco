@@ -172,6 +172,19 @@ namespace NPoco.Tests.FluentTests.QueryTests
         }
 
         [Test]
+        public void FetchWithWhereExpressionContainsWithNullable()
+        {
+            var list = new[] { 2 };
+            var users = Database.Query<User>().Where(x => list.Contains(x.SupervisorId.Value)).ToList();
+
+            Assert.AreEqual(1, users.Count);
+            for (int i = 0; i < users.Count; i++)
+            {
+                AssertUserValues(InMemoryUsers.Single(x => x.UserId == users[i].UserId), users[i]);
+            }
+        }
+
+        [Test]
         public void FetchWithWhereExpressionNotContains()
         {
             var list = new[] { 1, 2, 3, 4 };
@@ -182,6 +195,15 @@ namespace NPoco.Tests.FluentTests.QueryTests
             {
                 AssertUserValues(InMemoryUsers[i+4], users[i]);
             }
+        }
+
+        [Test]
+        public void FetchWithWhereExpressionContainsWithEmptyList()
+        {
+            var list = new int[] {};
+            var users = Database.Query<User>().Where(x => list.Contains(x.UserId)).ToList();
+
+            Assert.AreEqual(0, users.Count);
         }
 
         [Test]
@@ -243,6 +265,20 @@ namespace NPoco.Tests.FluentTests.QueryTests
         }
 
         [Test]
+        public void UpdateWhere1()
+        {
+            var age = InMemoryUsers[0].Age;
+            InMemoryUsers[0].Age = 99;
+
+            Database.UpdateWhere(InMemoryUsers[0], "Name = @0", InMemoryUsers[0].Name);
+            
+            var users = Database.SingleById<User>(InMemoryUsers[0].UserId);
+
+            Assert.AreEqual(99, users.Age);
+            InMemoryUsers[0].Age = age;
+        }
+
+        [Test]
         public void DeleteWhere()
         {
             var list = new[]
@@ -273,6 +309,14 @@ namespace NPoco.Tests.FluentTests.QueryTests
                                             TestDatabase.DbType.EscapeTableName("Users"));
                 
             Assert.AreEqual(expected, selectStatement);
+        }
+
+        [Test]
+        public void BitwiseSupport()
+        {
+            var users = Database.Query<User>().Where(x => (x.UserId & (int)TestEnum.None) == (int)TestEnum.None).ToList();
+            Assert.AreEqual(8, users.Count);
+            Assert.AreEqual(1, users[0].UserId);
         }
     }
 }
