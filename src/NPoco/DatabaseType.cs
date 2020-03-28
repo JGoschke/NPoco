@@ -264,7 +264,10 @@ namespace NPoco
                 return Singleton<SqlServerDatabaseType>.Instance;
             if (typeName.StartsWith("Fb") || typeName.StartsWith("Firebird"))
                 return Singleton<FirebirdDatabaseType>.Instance;
-
+            if (typeName.StartsWith("Ads"))
+            {
+                return Singleton<AdvantageDatabaseServer>.Instance;
+            }
             if (!string.IsNullOrEmpty(providerName))
             {
                 // Try again with provider name
@@ -282,6 +285,17 @@ namespace NPoco
                     return Singleton<SQLiteDatabaseType>.Instance;
                 if (providerName.IndexOf("Firebird", StringComparison.OrdinalIgnoreCase) >= 0)
                     return Singleton<FirebirdDatabaseType>.Instance;
+#if !NET35 && !NET40
+                if (providerName.IndexOf("Advantage", StringComparison.CurrentCultureIgnoreCase) >= 0)
+                {
+                    return Singleton<AdvantageDatabaseServer>.Instance;
+                }
+#else
+                if (providerName.IndexOf("Advantage", StringComparison.InvariantCultureIgnoreCase) >= 0)
+                {
+                    return Singleton<AdvantageDatabaseServer>.Instance;
+                }
+#endif
             }
 
             // Assume SQL Server
